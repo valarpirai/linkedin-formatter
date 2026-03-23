@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { toBold, toItalic, toMonospace, toBoldItalic, formatSelection } from '../utils/unicodeTransformer';
 import { quickFormat, markdownToLinkedIn } from '../utils/markdownParser';
 
@@ -7,12 +7,45 @@ function TextFormatter() {
   const [outputText, setOutputText] = useState('');
   const [copySuccess, setCopySuccess] = useState(false);
   const textareaRef = useRef(null);
+  const debounceTimerRef = useRef(null);
+
+  // Auto-convert markdown after typing stops (debounced)
+  useEffect(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = setTimeout(() => {
+      if (inputText) {
+        const converted = markdownToLinkedIn(inputText);
+        setOutputText(converted);
+      } else {
+        setOutputText('');
+      }
+    }, 500); // Convert after 500ms of inactivity
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [inputText]);
 
   // Handle text input change
   const handleInputChange = (e) => {
     const text = e.target.value;
     setInputText(text);
-    setOutputText(quickFormat(text));
+  };
+
+  // Handle paste - convert immediately
+  const handlePaste = (e) => {
+    // Let the default paste happen first
+    setTimeout(() => {
+      const text = textareaRef.current?.value || '';
+      setInputText(text);
+      const converted = markdownToLinkedIn(text);
+      setOutputText(converted);
+    }, 0);
   };
 
   // Apply formatting to selected text
@@ -30,19 +63,16 @@ function TextFormatter() {
 
     const formatted = formatSelection(inputText, start, end, style);
     setInputText(formatted);
-    setOutputText(quickFormat(formatted));
+
+    // Convert immediately after formatting
+    const converted = markdownToLinkedIn(formatted);
+    setOutputText(converted);
 
     // Restore focus
     setTimeout(() => {
       textarea.focus();
       textarea.setSelectionRange(start, start + (end - start));
     }, 0);
-  };
-
-  // Convert full markdown
-  const convertMarkdown = () => {
-    const converted = markdownToLinkedIn(inputText);
-    setOutputText(converted);
   };
 
   // Copy to clipboard
@@ -83,6 +113,57 @@ function TextFormatter() {
     URL.revokeObjectURL(url);
   };
 
+  // Apply list formatting to selected lines
+  const applyListFormat = (listType) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+
+    if (start === end) {
+      alert('Please select text (multiple lines) first');
+      return;
+    }
+
+    const before = inputText.substring(0, start);
+    const selected = inputText.substring(start, end);
+    const after = inputText.substring(end);
+
+    // Split selected text into lines
+    const lines = selected.split('\n').filter(line => line.trim());
+
+    // Format each line as a list item
+    let formattedLines;
+    if (listType === 'bullet') {
+      formattedLines = lines.map(line => {
+        // Remove existing list markers
+        const cleaned = line.replace(/^[\s-*•]+/, '').trim();
+        return `- ${cleaned}`;
+      });
+    } else if (listType === 'numbered') {
+      formattedLines = lines.map((line, index) => {
+        // Remove existing list markers
+        const cleaned = line.replace(/^[\s-*•\d.]+/, '').trim();
+        return `${index + 1}. ${cleaned}`;
+      });
+    }
+
+    const formatted = before + formattedLines.join('\n') + after;
+    setInputText(formatted);
+
+    // Convert immediately
+    const converted = markdownToLinkedIn(formatted);
+    setOutputText(converted);
+
+    // Restore focus
+    setTimeout(() => {
+      textarea.focus();
+      const newEnd = start + formattedLines.join('\n').length;
+      textarea.setSelectionRange(start, newEnd);
+    }, 0);
+  };
+
   // Clear all
   const clearAll = () => {
     setInputText('');
@@ -92,8 +173,8 @@ function TextFormatter() {
   return (
     <div className="w-full max-w-6xl mx-auto px-4 py-8">
       <div className="bg-white rounded-xl shadow-xl overflow-hidden">
-        {/* Toolbar */}
-        <div className="bg-gradient-to-r from-purple-600 to-purple-700 px-6 py-4">
+        {/* Toolbar - Sticky */}
+        <div className="sticky top-0 z-10 bg-gradient-to-r from-purple-600 to-purple-700 px-6 py-4 shadow-md">
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => applyFormat('bold')}
@@ -123,14 +204,22 @@ function TextFormatter() {
             >
               𝘽𝙄
             </button>
-            <div className="flex-1"></div>
+            <div className="w-px h-8 bg-white/20"></div>
             <button
-              onClick={convertMarkdown}
+              onClick={() => applyListFormat('bullet')}
               className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors"
-              title="Convert full markdown"
+              title="Bullet list (select lines first)"
             >
-              Convert MD
+              • List
             </button>
+            <button
+              onClick={() => applyListFormat('numbered')}
+              className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors"
+              title="Numbered list (select lines first)"
+            >
+              1. List
+            </button>
+            <div className="flex-1"></div>
             <button
               onClick={clearAll}
               className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors"
@@ -152,17 +241,23 @@ function TextFormatter() {
               ref={textareaRef}
               value={inputText}
               onChange={handleInputChange}
+              onPaste={handlePaste}
               placeholder="Type your text here...
 
 **Bold text** with double asterisks
 *Italic text* with single asterisks
 `Monospace text` with backticks
 
-Or just type and select text to format using buttons above!"
+Formatting is applied automatically as you type or paste!"
               className="flex-1 min-h-[300px] p-4 border-2 border-gray-200 rounded-lg focus:border-purple-500 focus:outline-none resize-none font-mono text-sm"
             />
-            <div className="text-xs text-gray-500 mt-2">
-              {inputText.length} characters
+            <div className={`text-xs mt-2 ${
+              inputText.length > 3000 ? 'text-red-600 font-semibold' :
+              inputText.length > 2700 ? 'text-orange-600 font-semibold' :
+              'text-gray-500'
+            }`}>
+              {inputText.length} / 3000 characters
+              {inputText.length > 3000 && ' (exceeds LinkedIn limit!)'}
             </div>
           </div>
 
@@ -178,8 +273,13 @@ Or just type and select text to format using buttons above!"
                 </span>
               )}
             </div>
-            <div className="text-xs text-gray-500 mt-2">
-              {outputText.length} characters
+            <div className={`text-xs mt-2 ${
+              outputText.length > 3000 ? 'text-red-600 font-semibold' :
+              outputText.length > 2700 ? 'text-orange-600 font-semibold' :
+              'text-gray-500'
+            }`}>
+              {outputText.length} / 3000 characters
+              {outputText.length > 3000 && ' (exceeds LinkedIn limit!)'}
             </div>
           </div>
         </div>
@@ -229,7 +329,7 @@ Or just type and select text to format using buttons above!"
         <div className="bg-purple-50 px-6 py-4 border-t border-purple-100">
           <p className="text-sm text-purple-800">
             <strong>💡 Tips:</strong> Use markdown syntax like **bold**, *italic*, or `code`.
-            Or select text and click formatting buttons. Your text is converted to Unicode that works on LinkedIn!
+            Formatting is applied automatically as you type or paste! You can also select text and use the formatting buttons above.
           </p>
         </div>
       </div>
